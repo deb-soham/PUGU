@@ -1,0 +1,7 @@
+.streamlit/secrets.toml
+venv/
+__pycache__/
+# Local test scripts
+test_ai.py
+test_net.py
+list_models.py
