@@ -16,6 +16,8 @@ import re
 
 from groq import Groq
 
+import usage_meter
+
 logger = logging.getLogger(__name__)
 
 MAX_INPUT_CHARS = 5000
@@ -75,6 +77,7 @@ def simplify_text_ai(text: str, api_key: str, model: str) -> str:
         ],
         **_request_options(model, normal_tokens=1800, reasoning_tokens=3500),
     )
+    usage_meter.add(getattr(getattr(completion, "usage", None), "total_tokens", 0))
     simplified = _strip_preamble(completion.choices[0].message.content or "")
     if not simplified:
         raise ValueError(
@@ -98,6 +101,7 @@ def simplify_text(text: str, api_key: str | None, model: str) -> tuple[str, bool
         except Exception:
             logger.warning("AI text simplification failed; using original.", exc_info=True)
     return text, False
+
 
 def split_paragraphs(text: str) -> list[list[str]]:
     """Split text into paragraphs, each a list of sentences."""
