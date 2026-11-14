@@ -1,19 +1,26 @@
 """
 database.py - Supabase persistence layer for PUGU.
 
-Stores one row of preferences per Google user in the `user_settings` table.
+* user_settings : one row of preferences per Google user.
+* ai_usage      : AI tokens used per user (and by everyone together) per UTC day.
+
 All credentials are read from st.secrets["supabase"].
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 import streamlit as st
 from supabase import Client, create_client
 
+logger = logging.getLogger(__name__)
+
 TABLE_NAME = "user_settings"
+USAGE_TABLE = "ai_usage"
+GLOBAL_USAGE_ID = "__all__"  # the usage row that counts everyone together
 
 # Choices shared with the UI so the database never stores unknown values.
 FONT_CHOICES = ("OpenDyslexic", "Arial")
@@ -37,6 +44,9 @@ def get_client() -> Client:
     return create_client(config["url"], config["key"])
 
 
+# --------------------------------------------------------------------------- #
+# User settings
+# --------------------------------------------------------------------------- #
 def normalise_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     """
     Merge raw values over the defaults and coerce them into valid ranges/choices.
@@ -107,3 +117,99 @@ def upsert_user_settings(
         st.warning(f"Could not save your settings. ({exc})")
         return False
     return True
+
+
+# --------------------------------------------------------------------------- #
+# AI usage (used by the limits in app.py)
+# --------------------------------------------------------------------------- #
+def _today_utc() -> str:
+    """Today's date in UTC, the same day boundary Groq uses for daily limits."""
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def get_usage_today(google_id: str) -> tuple[int, int] | None:
+    """
+    Return (tokens this user used today, tokens everyone used today).
+
+    Returns None if usage cannot be read, so the caller can refuse AI use
+    instead of running without protection.
+    """
+    try:
+        rows = (
+            get_client()
+            .table(USAGE_TABLE)
+            .select("google_id, tokens")
+            .eq("day", _today_utc())
+            .in_("google_id", [google_id, GLOBAL_USAGE_ID])
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        logger.warning("Could not read AI usage.", exc_info=True)
+        return None
+
+    user_tokens = sum(r["tokens"] for r in rows if r["google_id"] == google_id)
+    global_tokens = sum(r["tokens"] for r in rows if r["google_id"] == GLOBAL_USAGE_ID)
+    return user_tokens, global_tokens
+
+
+def record_ai_usage(google_id: str, tokens: int) -> None:
+    """Add `tokens` to this user's and the global counter for today (atomic, in SQL)."""
+    if tokens <= 0:
+        return
+    try:
+        get_client().rpc(
+            "record_ai_usage", {"p_google_id": google_id, "p_tokens": int(tokens)}
+        ).execute()
+    except Exception:
+        logger.warning("Could not record AI usage.", exc_info=True)
+
+
+def get_admin_report() -> dict[str, Any] | None:
+    """Today's usage per user plus the most recent users, for the admin tab."""
+    try:
+        client = get_client()
+        usage_rows = (
+            client.table(USAGE_TABLE)
+            .select("google_id, tokens, requests")
+            .eq("day", _today_utc())
+            .execute()
+            .data
+            or []
+        )
+        user_rows = (
+            client.table(TABLE_NAME)
+            .select("google_id, email, updated_at")
+            .order("updated_at", desc=True)
+            .limit(200)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        logger.warning("Could not build the admin report.", exc_info=True)
+        return None
+
+    emails = {row["google_id"]: row.get("email") for row in user_rows}
+    per_user = [
+        {
+            "user": emails.get(row["google_id"]) or row["google_id"],
+            "tokens": row["tokens"],
+            "requests": row["requests"],
+        }
+        for row in usage_rows
+        if row["google_id"] != GLOBAL_USAGE_ID
+    ]
+    per_user.sort(key=lambda item: item["tokens"], reverse=True)
+
+    everyone = next((r for r in usage_rows if r["google_id"] == GLOBAL_USAGE_ID), None)
+    return {
+        "global_tokens": everyone["tokens"] if everyone else 0,
+        "global_requests": everyone["requests"] if everyone else 0,
+        "per_user": per_user,
+        "users": [
+            {"email": row.get("email"), "last_saved": row.get("updated_at")}
+            for row in user_rows
+        ],
+    }
