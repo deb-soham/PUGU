@@ -32,7 +32,7 @@ import database
 import dyslexia_module
 import usage_meter
 
-st.set_page_config(page_title="PUGU", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="PUGU", page_icon="assets/pugu_icon.png", layout="wide")
 PRIVACY_NOTE = (
     "**Your privacy:** PUGU stores your Google account ID and email address (to sign you in), "
     "your display preferences, and how much AI help you used today. The tasks and text you "
@@ -171,7 +171,7 @@ def get_ai_config() -> tuple[str | None, str]:
 def require_login() -> dict:
     """Block the app until the user signs in with Google; return their identity."""
     if not st.user.is_logged_in:
-        st.title("🧠 PUGU")
+        st.image("assets/pugu_logo.png", width=220)
         st.subheader("Personalized Understanding and Guidance Unit")
         st.write(
             "Calm, step-by-step support for focus and reading. "
@@ -818,7 +818,7 @@ def render_usage_banner(user: dict, quiet: bool = False) -> None:
 def render_sidebar(user: dict) -> None:
     saved = st.session_state.saved_settings
     with st.sidebar:
-        st.header("🧠 PUGU")
+        st.image("assets/pugu_logo.png", width=160)
         st.write(f"Signed in as **{user['name']}**")
         if user["email"]:
             st.caption(user["email"])
